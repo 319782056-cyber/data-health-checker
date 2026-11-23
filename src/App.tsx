@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
+import type { Dispatch, SetStateAction, ReactNode } from 'react'
 import { HashRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import {
-  Activity, ArrowDown, ArrowUp, BarChart3, Bot, Check, ChevronDown, CircleHelp,
+  Activity, ArrowDown, ArrowUp, BarChart3, Bot, Check, ChevronDown,
   Combine, Database, Download, FilePlus2, FileSpreadsheet, History, LayoutDashboard,
-  Menu, Moon, MoreHorizontal, Search, Settings2, ShieldCheck, Sparkles, Table2,
+  Menu, MoreHorizontal, Search, Settings2, ShieldCheck, Sparkles, Table2,
   WandSparkles, Workflow, X
 } from 'lucide-react'
 import './v2.css'
@@ -87,7 +88,7 @@ function AppShell() {
     </aside>
     {sidebarOpen && <button aria-label="关闭导航" className="v2-scrim" onClick={() => setSidebarOpen(false)}/>}
     <main className="v2-main">
-      <header className="v2-topbar"><div className="v2-top-left"><button className="v2-menu" onClick={() => setSidebarOpen(true)}><Menu size={19}/></button><span>工作空间</span><b>/</b><strong>{pageTitle}</strong></div><div className="v2-top-actions"><div className="v2-mode-switch"><button className={mode === 'simple' ? 'selected' : ''} onClick={() => setMode('simple')}>简单模式</button><button className={mode === 'professional' ? 'selected' : ''} onClick={() => setMode('professional')}>专业模式</button></div><button className="v2-ai-button" onClick={() => setMessage('AI 助手将在云端授权与计划校验模块完成后启用。当前数据不会发送到云端。')}><Sparkles size={15}/> AI 助手</button></div></header>
+      <header className="v2-topbar"><div className="v2-top-left"><button className="v2-menu" onClick={() => setSidebarOpen(true)}><Menu size={19}/></button><span>工作空间</span><b>/</b><strong>{pageTitle}</strong></div><div className="v2-top-actions">{busy && <span className="v2-importing">正在读取文件…</span>}<div className="v2-mode-switch"><button className={mode === 'simple' ? 'selected' : ''} onClick={() => setMode('simple')}>简单模式</button><button className={mode === 'professional' ? 'selected' : ''} onClick={() => setMode('professional')}>专业模式</button></div><button className="v2-ai-button" onClick={() => setMessage('AI 助手将在云端授权与计划校验模块完成后启用。当前数据不会发送到云端。')}><Sparkles size={15}/> AI 助手</button></div></header>
       <div className="v2-content">
         <Routes>
           <Route path="/" element={<Overview {...context}/>}/>
@@ -108,13 +109,13 @@ function AppShell() {
 }
 
 type Context = {
-  datasets: Dataset[]; setDatasets: React.Dispatch<React.SetStateAction<Dataset[]>>;
+  datasets: Dataset[]; setDatasets: Dispatch<SetStateAction<Dataset[]>>;
   activeId: string; setActiveId: (id: string) => void; current?: Dataset;
-  mode: Mode; setMode: (mode: Mode) => void; steps: Step[]; setSteps: React.Dispatch<React.SetStateAction<Step[]>>;
+  mode: Mode; setMode: (mode: Mode) => void; steps: Step[]; setSteps: Dispatch<SetStateAction<Step[]>>;
   history: string[]; record: (label: string) => void; importFiles: (files: FileList | null) => Promise<void>;
   openImport: () => void; exportCurrent: () => void;
 }
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="v2-page-heading"><div><div className="v2-eyebrow"><Sparkles size={13}/>{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 function Overview(p: Context) {
@@ -128,7 +129,7 @@ function Overview(p: Context) {
     <div className="v2-feature-grid">{[{icon:<Table2/>,title:'数据浏览',desc:'查看字段、搜索和筛选数据',to:'#/data'},{icon:<WandSparkles/>,title:'智能处理',desc:'清洗、转换并记录处理步骤',to:'#/transform'},{icon:<Combine/>,title:'多表合并',desc:'追加或关联不同数据来源',to:'#/merge'},{icon:<Bot/>,title:'AI 数据助手',desc:'自然语言生成可检查的操作计划',to:'#/transform'}].map(x=><a className="v2-feature" href={x.to} key={x.title}><span>{x.icon}</span><b>{x.title}</b><small>{x.desc}</small></a>)}</div>
   </>
 }
-function Stat({label,value,icon}:{label:string;value:string;icon:React.ReactNode}){return <div className="v2-stat"><span>{icon}</span><div><small>{label}</small><b>{value}</b></div></div>}
+function Stat({label,value,icon}:{label:string;value:string;icon:ReactNode}){return <div className="v2-stat"><span>{icon}</span><div><small>{label}</small><b>{value}</b></div></div>}
 function DataBrowser(p:Context){
   const [q,setQ]=useState('')
   const [sort,setSort]=useState<{i:number;dir:1|-1}|null>(null)
@@ -148,7 +149,7 @@ function Transform(p:Context){
     {!d?<EmptyPrompt onImport={p.openImport}/>:<div className="v2-transform-layout"><section className="v2-card"><div className="v2-section-head"><div><h2>选择数据集</h2><p>{d.fileName} / {d.sheetName}</p></div></div><label className="v2-field-label">处理字段</label><select className="v2-select" value={column} onChange={e=>setColumn(e.target.value)}><option value="">选择一个字段</option>{d.headers.map(h=><option key={h}>{h}</option>)}</select><div className="v2-operation-list"><button disabled={!column} onClick={applyTrim}><WandSparkles size={17}/><span><b>清理首尾空格</b><small>删除所选文本字段前后的空格</small></span></button><button onClick={removeDuplicates}><Table2 size={17}/><span><b>删除完全重复行</b><small>按整行内容去重，保留首次出现项</small></span></button></div><p className="v2-note"><ShieldCheck size={15}/> 当前操作修改浏览器中的工作副本，不会覆盖原始文件。导出前请检查结果。</p></section><section className="v2-card"><div className="v2-section-head"><div><h2>应用步骤</h2><p>按顺序记录本次会话的处理动作</p></div><span className="v2-muted">{p.steps.length} 步</span></div>{p.steps.length?<ol className="v2-steps">{p.steps.map((s,i)=><li key={s.id}><span>{i+1}</span><div><b>{s.label}</b><small>{s.detail}</small></div><Check size={15}/></li>)}</ol>:<div className="v2-empty"><Workflow size={25}/><b>还没有处理步骤</b><span>执行左侧操作后，步骤会出现在这里。</span></div>}<button className="v2-secondary v2-export-wide" onClick={p.exportCurrent}><Download size={15}/> 导出当前数据</button></section></div>}
   </>
 }
-function ModulePage({icon,title,description,bullets,status}:{icon:React.ReactNode;title:string;description:string;bullets:string[];status:string}){return <><PageHeading eyebrow="WORKSPACE MODULE" title={title} description={description}/><section className="v2-card v2-module-card"><div className="v2-module-icon">{icon}</div><div><span className="v2-status">{status}</span><h2>{title}能力规划</h2><p>该模块已纳入 V2.0 统一架构，当前先完成基础工作台和数据引擎，再接入完整交互。</p></div><ul>{bullets.map(x=><li key={x}>{x}</li>)}</ul></section></>}
+function ModulePage({icon,title,description,bullets,status}:{icon:ReactNode;title:string;description:string;bullets:string[];status:string}){return <><PageHeading eyebrow="WORKSPACE MODULE" title={title} description={description}/><section className="v2-card v2-module-card"><div className="v2-module-icon">{icon}</div><div><span className="v2-status">{status}</span><h2>{title}能力规划</h2><p>该模块已纳入 V2.0 统一架构，当前先完成基础工作台和数据引擎，再接入完整交互。</p></div><ul>{bullets.map(x=><li key={x}>{x}</li>)}</ul></section></>}
 function ActivityPage({history}:{history:string[]}){return <><PageHeading eyebrow="ACTIVITY LOG" title="操作记录" description="查看当前会话中执行过的数据操作。"/><section className="v2-card">{history.length?<div className="v2-steps">{history.map((x,i)=><div className="v2-activity-row" key={i}><span>{history.length-i}</span><b>{x}</b><Check size={15}/></div>)}</div>:<div className="v2-empty"><History size={25}/><b>暂无操作记录</b><span>数据处理操作会记录在这里。</span></div>}</section></>}
 function SettingsPage({mode,setMode}:{mode:Mode;setMode:(m:Mode)=>void}){return <><PageHeading eyebrow="PREFERENCES & PRIVACY" title="设置与隐私" description="管理工作模式和数据共享偏好。"/><section className="v2-card v2-settings"><h2>工作模式</h2><p>简单模式提供引导式操作；专业模式展示更完整的配置与信息。</p><div className="v2-mode-switch large"><button className={mode==='simple'?'selected':''} onClick={()=>setMode('simple')}>简单模式</button><button className={mode==='professional'?'selected':''} onClick={()=>setMode('professional')}>专业模式</button></div><hr/><h2>数据隐私</h2><p>默认在本地浏览器处理文件。云端 AI 功能上线后，会在每次需要发送数据前说明发送内容、服务提供方和用途，并要求你明确授权。当前版本尚未启用云端数据传输。</p><div className="v2-privacy-banner"><ShieldCheck size={18}/> 本地优先 · 云端 AI 需明确授权</div></section></>}
 function Root(){return <HashRouter><AppShell/></HashRouter>}
