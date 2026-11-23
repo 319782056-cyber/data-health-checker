@@ -11,7 +11,9 @@ A modern, browser-first Excel and CSV data quality checker.
 
 ## Privacy
 
-The first version processes uploaded files locally in your browser. Files are not sent to an application server.
+The first version reads and processes selected XLSX/CSV files in the user's browser using the File API and SheetJS. The application code does not upload file contents to an application server. No account or cloud storage is used.
+
+The site no longer loads web fonts from a third-party font CDN. As with any website, the browser still requests the site's static application assets from GitHub Pages. Browser extensions, malware, and future code changes are outside this local-processing guarantee.
 
 ## Development
 
