@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import {
-  Activity, ArrowDownUp, BarChart3, Check, ChevronDown, Download, FilePlus2,
+  Activity, ArrowDownUp, BarChart3, Check, Download, FilePlus2,
   FileSpreadsheet, Filter, History, LayoutDashboard, Search, ShieldCheck,
   Sparkles, Table2, Trash2, WandSparkles, X, RotateCcw, Columns3, Rows3
 } from 'lucide-react'
