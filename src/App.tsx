@@ -4,7 +4,7 @@ import {
   Activity, AlertCircle, ArrowUpRight, Check, ChevronDown, CircleHelp,
   ClipboardList, CloudUpload, FileSpreadsheet, FileText, HardDrive,
   LayoutDashboard, RefreshCw, ShieldCheck, Sparkles, Table2, Trash2,
-  Upload, X,
+  
 } from 'lucide-react'
 
 type Cell = string | number | boolean | Date | null
