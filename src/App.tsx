@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction, ReactNode } from 'react'
 import { HashRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import * as XLSX from 'xlsx'
@@ -15,6 +15,10 @@ type Dataset = { id: string; fileName: string; sheetName: string; headers: strin
 type Mode = 'simple' | 'professional'
 type Step = { id: string; label: string; detail: string }
 const uid = () => Math.random().toString(36).slice(2, 10)
+const DB_NAME = 'data-workbench-v2'
+function openWorkspaceDb(): Promise<IDBDatabase> { return new Promise((resolve, reject) => { const req = indexedDB.open(DB_NAME, 1); req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('workspace')) req.result.createObjectStore('workspace') }; req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error) }) }
+async function readWorkspace<T>(key: string, fallback: T): Promise<T> { const db = await openWorkspaceDb(); return new Promise((resolve, reject) => { const req = db.transaction('workspace','readonly').objectStore('workspace').get(key); req.onsuccess = () => { resolve((req.result as T | undefined) ?? fallback); db.close() }; req.onerror = () => { reject(req.error); db.close() } }) }
+async function writeWorkspace(key: string, value: unknown): Promise<void> { const db = await openWorkspaceDb(); return new Promise((resolve,reject) => { const tx=db.transaction('workspace','readwrite'); tx.objectStore('workspace').put(value,key); tx.oncomplete=()=>{db.close();resolve()}; tx.onerror=()=>{db.close();reject(tx.error)} }) }
 const cellText = (v: Cell) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? '')
 const blank = (v: Cell) => v == null || String(v).trim() === ''
 type FieldQuality = { name: string; missing: number; filled: number; unique: number; type: string; completeness: number }
@@ -71,6 +75,7 @@ const titleMap: Record<string, string> = Object.fromEntries(nav.map(n => [n.to, 
 
 function AppShell() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [workspaceReady, setWorkspaceReady] = useState(false)
   const [activeId, setActiveId] = useState('')
   const [mode, setMode] = useState<Mode>('simple')
   const [steps, setSteps] = useState<Step[]>([])
@@ -79,6 +84,17 @@ function AppShell() {
   const [busy, setBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    let alive = true
+    Promise.all([readWorkspace<Dataset[]>('datasets', []), readWorkspace<Step[]>('steps', []), readWorkspace<string[]>('history', [])])
+      .then(([d, s, h]) => { if (alive) { setDatasets(d); setSteps(s); setHistory(h); setWorkspaceReady(true) } })
+      .catch(() => { if (alive) { setWorkspaceReady(true); setMessage('本地工作区读取失败，当前会话仍可使用。') } })
+    return () => { alive = false }
+  }, [])
+  useEffect(() => {
+    if (workspaceReady) void Promise.all([writeWorkspace('datasets', datasets), writeWorkspace('steps', steps), writeWorkspace('history', history)])
+      .catch(() => setMessage('本地保存失败，请导出重要结果备份。'))
+  }, [datasets, steps, history, workspaceReady])
   const current = datasets.find(d => d.id === activeId) ?? datasets[0]
   const location = useLocation()
   const pageTitle = titleMap[location.pathname] ?? '数据总览'
