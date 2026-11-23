@@ -1,10 +1,9 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import {
   Activity, ArrowDownUp, BarChart3, Check, ChevronDown, Download, FilePlus2,
-  FileSpreadsheet, Filter, HardDrive, History, LayoutDashboard, ListFilter,
-  Search, ShieldCheck, Sparkles, Table2, Trash2, WandSparkles, X, RotateCcw,
-  Columns3, Rows3, Combine, CircleHelp
+  FileSpreadsheet, Filter, History, LayoutDashboard, Search, ShieldCheck,
+  Sparkles, Table2, Trash2, WandSparkles, X, RotateCcw, Columns3, Rows3
 } from 'lucide-react'
 
 type Cell = string | number | boolean | Date | null
