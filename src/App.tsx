@@ -97,7 +97,7 @@ function App() {
           <a className="nav-item muted"><ClipboardList size={18} /> 处理历史</a>
         </nav>
         <div className="sidebar-bottom">
-          <div className="privacy-card"><div className="privacy-icon"><HardDrive size={17}/></div><div><b>本地隐私保护</b><p>文件仅在当前浏览器处理，不会上传服务器。</p></div><Check size={15} className="privacy-check"/></div>
+          <div className="privacy-card"><div className="privacy-icon"><HardDrive size={17}/></div><div><b>本地隐私保护</b><p>文件只在你的浏览器内读取和分析，不会上传到应用服务器。</p></div><Check size={15} className="privacy-check"/></div>
           <div className="profile"><div className="avatar">DH</div><div><b>个人工作区</b><small>免费使用 · 无需登录</small></div><CircleHelp size={17} className="help-icon"/></div>
         </div>
       </aside>
@@ -126,6 +126,7 @@ function App() {
                   <div className="upload-icon"><CloudUpload size={29}/></div>
                   <h3>拖拽文件到这里，或 <button className="text-button" onClick={() => inputRef.current?.click()}>点击上传</button></h3>
                   <p>支持 Excel 工作簿和 CSV 文件，单个文件最大建议 20 MB</p>
+                  <div className="privacy-note"><ShieldCheck size={15}/><span><b>隐私说明：</b>文件内容仅在当前浏览器处理，不会上传到应用服务器或发送给第三方。点击“移除文件”可清除当前工作区中的数据。</span></div>
                   <div className="file-types"><span><FileSpreadsheet size={15}/> XLSX / XLS</span><span><FileText size={15}/> CSV</span><span><ShieldCheck size={15}/> 安全本地解析</span></div>
                 </div>
                 {error && <div className="error-message"><AlertCircle size={16}/>{error}</div>}
