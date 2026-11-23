@@ -24,6 +24,33 @@ function App() {
   const headers = rows[0]?.map((value, index) => String(value ?? '').trim() || `字段 ${index + 1}`) ?? []
   const records = rows.slice(1)
 
+
+  const columnProfiles = useMemo(() => {
+    return headers.map((header, columnIndex) => {
+      const values = records
+        .map((row) => row[columnIndex])
+        .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+      const normalized = values.map((value) => String(value).trim())
+      const uniqueValues = new Set(normalized)
+      const types = new Set(normalized.map(inferCellType))
+      const missing = Math.max(0, records.length - values.length)
+      const typeLabel = types.size === 0
+        ? '暂无数据'
+        : types.size > 1
+          ? '混合类型'
+          : ({ number: '数值', date: '日期', boolean: '布尔值', text: '文本' } as Record<string, string>)[[...types][0]] ?? '文本'
+      return {
+        name: header,
+        missing,
+        missingRate: records.length ? Math.round(missing / records.length * 100) : 0,
+        unique: uniqueValues.size,
+        repeated: Math.max(0, values.length - uniqueValues.size),
+        typeLabel,
+        samples: [...uniqueValues].slice(0, 3),
+      }
+    })
+  }, [headers, records])
+
   const stats = useMemo(() => {
     if (!rows.length) return { rowCount: 0, colCount: 0, missing: 0, duplicate: 0, completeness: 100 }
     let missing = 0
@@ -152,6 +179,30 @@ function App() {
                 <Metric label="缺失单元格" value={stats.missing.toLocaleString()} suffix="个" icon={<AlertCircle/>} tone="amber"/>
                 <Metric label="完全重复行" value={stats.duplicate.toLocaleString()} suffix="行" icon={<RefreshCw/>} tone="green"/>
               </div>
+              <section className="profile-panel">
+                <div className="profile-heading">
+                  <div><h2>字段级质量分析</h2><p>逐列查看缺失率、唯一值、重复值和推断类型</p></div>
+                  <span className="profile-count">{columnProfiles.length} 个字段</span>
+                </div>
+                {columnProfiles.length ? (
+                  <div className="profile-table-wrap">
+                    <table className="profile-table">
+                      <thead><tr><th>字段名称</th><th>推断类型</th><th>缺失值</th><th>缺失率</th><th>唯一值</th><th>重复值</th><th>示例值</th></tr></thead>
+                      <tbody>{columnProfiles.map((column, index) => (
+                        <tr key={index}>
+                          <td><b>{column.name}</b></td>
+                          <td><span className={`type-chip ${column.typeLabel === '混合类型' ? 'mixed' : ''}`}>{column.typeLabel}</span></td>
+                          <td>{column.missing.toLocaleString()}</td>
+                          <td><div className="missing-cell"><span>{column.missingRate}%</span><div className="missing-track"><i style={{ width: `${column.missingRate}%` }} /></div></div></td>
+                          <td>{column.unique.toLocaleString()}</td>
+                          <td>{column.repeated.toLocaleString()}</td>
+                          <td><div className="sample-values">{column.samples.length ? column.samples.map((sample, sampleIndex) => <span key={sampleIndex} title={sample}>{sample}</span>) : <span className="no-sample">暂无</span>}</div></td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ) : <div className="empty-state">没有可分析的字段。</div>}
+              </section>
               <section className="data-panel"><div className="data-panel-head"><div><h2>数据预览</h2><p>已读取数据 · 当前展示前 100 条记录</p></div><div className="sheet-select-wrap"><label>工作表</label><div className="select-shell"><select value={activeSheet} onChange={(event) => setActiveSheet(event.target.value)}>{sheets.map((sheet) => <option key={sheet.name}>{sheet.name}</option>)}</select><ChevronDown size={15}/></div></div></div>
                 <div className="table-wrap"><table><thead><tr><th className="row-num">#</th>{headers.map((header, index) => <th key={index}>{header}</th>)}</tr></thead><tbody>{records.slice(0,100).map((row, rowIndex) => <tr key={rowIndex}><td className="row-num">{rowIndex + 1}</td>{headers.map((_, colIndex) => <td key={colIndex}>{row[colIndex] === null || row[colIndex] === undefined || row[colIndex] === '' ? <span className="empty-cell">空值</span> : String(row[colIndex])}</td>)}</tr>)}</tbody></table>{!records.length && <div className="empty-state">当前工作表没有可预览的数据行。</div>}</div>
                 <div className="table-foot"><span>共 {stats.rowCount.toLocaleString()} 条记录</span><span>完整性 <b>{stats.completeness}%</b></span></div>
@@ -164,6 +215,17 @@ function App() {
       </main>
     </div>
   )
+}
+
+function inferCellType(value: Cell): 'number' | 'date' | 'boolean' | 'text' {
+  if (typeof value === 'number') return 'number'
+  if (typeof value === 'boolean') return 'boolean'
+  if (value instanceof Date) return 'date'
+  const text = String(value ?? '').trim()
+  if (/^(true|false|是|否)$/i.test(text)) return 'boolean'
+  if (/^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?%?$/i.test(text.replace(/,/g, ''))) return 'number'
+  if (/^\\d{4}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?$/.test(text)) return 'date'
+  return 'text'
 }
 
 function CopyIcon() { return <ClipboardList size={19}/> }
