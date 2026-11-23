@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy V1 and V2 Preview to GitHub Pages
 
 on:
   push:
@@ -18,20 +18,50 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout V1 stable source
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: v1
+
+      - name: Checkout V2 preview source
+        uses: actions/checkout@v4
+        with:
+          ref: feature/data-workbench-v2
+          path: v2
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install dependencies
+
+      - name: Install V1 dependencies
+        working-directory: v1
         run: npm install
-      - name: Build
+
+      - name: Build V1 stable site
+        working-directory: v1
         run: npm run build
+
+      - name: Install V2 dependencies
+        working-directory: v2
+        run: npm install
+
+      - name: Build V2 preview site
+        working-directory: v2
+        run: npm run build
+
+      - name: Assemble combined Pages site
+        run: |
+          mkdir -p site/v2-preview
+          cp -R v1/dist/. site/
+          cp -R v2/dist/. site/v2-preview/
+          touch site/.nojekyll
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./site
 
   deploy:
     environment:
