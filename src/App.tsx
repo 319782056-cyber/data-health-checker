@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import * as XLSX from 'xlsx'
 import {
   Activity, AlertCircle, ArrowUpRight, Check, ChevronDown, CircleHelp,
@@ -166,7 +166,7 @@ function App() {
 }
 
 function CopyIcon() { return <ClipboardList size={19}/> }
-function Metric({ label, value, suffix, icon, tone }: { label: string; value: string; suffix: string; icon: React.ReactNode; tone: string }) {
+function Metric({ label, value, suffix, icon, tone }: { label: string; value: string; suffix: string; icon: ReactNode; tone: string }) {
   return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><div><span>{label}</span><strong>{value}<small>{suffix}</small></strong></div></div>
 }
 
