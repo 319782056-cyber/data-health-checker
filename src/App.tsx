@@ -1,236 +1,198 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import * as XLSX from 'xlsx'
 import {
-  Activity, AlertCircle, ArrowUpRight, Check, ChevronDown, CircleHelp,
-  ClipboardList, CloudUpload, FileSpreadsheet, FileText, HardDrive,
-  LayoutDashboard, RefreshCw, ShieldCheck, Sparkles, Table2, Trash2,
-  
+  Activity, ArrowDownUp, BarChart3, Check, ChevronDown, Download, FilePlus2,
+  FileSpreadsheet, Filter, HardDrive, History, LayoutDashboard, ListFilter,
+  Search, ShieldCheck, Sparkles, Table2, Trash2, WandSparkles, X, RotateCcw,
+  Columns3, Rows3, Combine, CircleHelp
 } from 'lucide-react'
 
 type Cell = string | number | boolean | Date | null
-type SheetData = { name: string; rows: Cell[][] }
+type Dataset = { id: string; fileName: string; sheetName: string; headers: string[]; rows: Cell[][] }
+type FilterRule = { column: string; value: string }
+type HistoryItem = { label: string; before: Dataset[] }
+const uid = () => Math.random().toString(36).slice(2, 10)
+const cleanText = (v: Cell) => v instanceof Date ? v.toISOString().slice(0,10) : String(v ?? '')
+const isBlank = (v: Cell) => v === null || v === undefined || String(v).trim() === ''
 
 function App() {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [fileName, setFileName] = useState('')
-  const [sheets, setSheets] = useState<SheetData[]>([])
-  const [activeSheet, setActiveSheet] = useState('')
-  const [dragging, setDragging] = useState(false)
-  const [error, setError] = useState('')
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [activeId, setActiveId] = useState('')
+  const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState<FilterRule[]>([])
+  const [sort, setSort] = useState<{col:number;dir:'asc'|'desc'}|null>(null)
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [tab, setTab] = useState<'table'|'clean'|'pivot'>('table')
+  const [pivotRow, setPivotRow] = useState('')
+  const [pivotCol, setPivotCol] = useState('')
+  const [pivotValue, setPivotValue] = useState('')
+  const [pivotAgg, setPivotAgg] = useState<'sum'|'count'|'average'>('sum')
+  const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-
-  const current = sheets.find((sheet) => sheet.name === activeSheet)
+  const current = datasets.find(d => d.id === activeId)
+  const headers = current?.headers ?? []
   const rows = current?.rows ?? []
-  const headers = rows[0]?.map((value, index) => String(value ?? '').trim() || `字段 ${index + 1}`) ?? []
-  const records = rows.slice(1)
 
-
-  const columnProfiles = useMemo(() => {
-    return headers.map((header, columnIndex) => {
-      const values = records
-        .map((row) => row[columnIndex])
-        .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
-      const normalized = values.map((value) => String(value).trim())
-      const uniqueValues = new Set(normalized)
-      const types = new Set(normalized.map(inferCellType))
-      const missing = Math.max(0, records.length - values.length)
-      const typeLabel = types.size === 0
-        ? '暂无数据'
-        : types.size > 1
-          ? '混合类型'
-          : ({ number: '数值', date: '日期', boolean: '布尔值', text: '文本' } as Record<string, string>)[[...types][0]] ?? '文本'
-      return {
-        name: header,
-        missing,
-        missingRate: records.length ? Math.round(missing / records.length * 100) : 0,
-        unique: uniqueValues.size,
-        repeated: Math.max(0, values.length - uniqueValues.size),
-        typeLabel,
-        samples: [...uniqueValues].slice(0, 3),
-      }
-    })
-  }, [headers, records])
-
-  const stats = useMemo(() => {
-    if (!rows.length) return { rowCount: 0, colCount: 0, missing: 0, duplicate: 0, completeness: 100 }
-    let missing = 0
-    records.forEach((row) => {
-      headers.forEach((_, index) => {
-        if (row[index] === null || row[index] === undefined || String(row[index]).trim() === '') missing += 1
+  const filteredRows = useMemo(() => {
+    let result = rows.map((row,index)=>({row,index})).filter(({row}) => {
+      const q = query.trim().toLowerCase()
+      if(q && !row.some(v=>cleanText(v).toLowerCase().includes(q))) return false
+      return filters.every(f => {
+        if(!f.value.trim()) return true
+        const i=headers.indexOf(f.column)
+        return i < 0 || cleanText(row[i]).toLowerCase().includes(f.value.toLowerCase())
       })
     })
-    const signatures = records.map((row) => JSON.stringify(row))
-    const duplicate = signatures.length - new Set(signatures).size
-    const total = records.length * headers.length
-    return {
-      rowCount: records.length,
-      colCount: headers.length,
-      missing,
-      duplicate,
-      completeness: total ? Math.round((total - missing) / total * 100) : 100,
-    }
-  }, [rows, records, headers])
+    if(sort) result = [...result].sort((a,b)=>{
+      const av=a.row[sort.col], bv=b.row[sort.col]
+      const an=Number(av), bn=Number(bv)
+      const bothNumeric=String(av??'').trim()!=='' && String(bv??'').trim()!=='' && Number.isFinite(an) && Number.isFinite(bn)
+      const cmp=bothNumeric ? an-bn : cleanText(av).localeCompare(cleanText(bv),'zh-CN',{numeric:true,sensitivity:'base'})
+      return sort.dir==='asc'?cmp:-cmp
+    })
+    return result
+  },[rows,query,filters,headers,sort])
 
-  async function loadFile(file?: File) {
-    if (!file) return
-    setError('')
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    if (!['xlsx', 'xls', 'csv'].includes(ext ?? '')) {
-      setError('暂不支持该文件格式，请上传 XLSX、XLS 或 CSV 文件。')
-      return
-    }
-    setBusy(true)
+  const pivot = useMemo(() => {
+    if(!current || !pivotRow) return []
+    const ri=headers.indexOf(pivotRow), ci=pivotCol?headers.indexOf(pivotCol):-1, vi=pivotValue?headers.indexOf(pivotValue):-1
+    const groups=new Map<string,Map<string,number[]>>()
+    rows.forEach(row=>{
+      const r=cleanText(row[ri])||'(空白)', c=ci<0?'总计':cleanText(row[ci])||'(空白)'
+      if(!groups.has(r)) groups.set(r,new Map())
+      const inner=groups.get(r)!
+      if(!inner.has(c)) inner.set(c,[])
+      const n=vi<0?1:Number(row[vi])
+      if(pivotAgg==='count') inner.get(c)!.push(1)
+      else if(Number.isFinite(n)) inner.get(c)!.push(n)
+    })
+    const cols=[...new Set([...groups.values()].flatMap(m=>[...m.keys()]))]
+    return [...groups.entries()].map(([name,values])=>{
+      const cells=cols.map(c=>{const arr=values.get(c)??[];return pivotAgg==='count'?arr.length:pivotAgg==='average'?(arr.length?arr.reduce((a,b)=>a+b,0)/arr.length:0):arr.reduce((a,b)=>a+b,0)})
+      return {name,cells,total:cells.reduce((a,b)=>a+b,0)}
+    }).concat([{name:'总计',cells:cols.map((_,i)=>[...groups.values()].reduce((s,m)=>{const a=m.get(cols[i])??[];return s+(pivotAgg==='count'?a.length:pivotAgg==='average'?(a.length?a.reduce((x,y)=>x+y,0)/a.length:0):a.reduce((x,y)=>x+y,0))},0)),total:0}])
+  },[current,headers,rows,pivotRow,pivotCol,pivotValue,pivotAgg])
+
+  function commit(label:string, transform:(d:Dataset)=>Dataset) {
+    if(!current) return
+    setHistory(h=>[...h.slice(-19),{label,before:datasets}])
+    setDatasets(ds=>ds.map(d=>d.id===activeId?transform(d):d))
+    setMessage(label+'，已完成；可撤销。')
+  }
+  async function importFiles(files:FileList|null) {
+    if(!files?.length) return
+    setBusy(true);setMessage('')
     try {
-      const buffer = await file.arrayBuffer()
-      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
-      const parsed = workbook.SheetNames.map((name) => ({
-        name,
-        rows: XLSX.utils.sheet_to_json<Cell[]>(workbook.Sheets[name], {
-          header: 1,
-          defval: null,
-          raw: false,
-        }),
-      }))
-      setSheets(parsed)
-      setActiveSheet(parsed[0]?.name ?? '')
-      setFileName(file.name)
-    } catch {
-      setError('文件读取失败，请确认文件未损坏或受密码保护。')
-    } finally {
-      setBusy(false)
+      const added:Dataset[]=[]
+      for(const file of Array.from(files)){
+        const ext=file.name.split('.').pop()?.toLowerCase()
+        if(!['xlsx','xls','csv'].includes(ext??'')) continue
+        const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true})
+        wb.SheetNames.forEach(name=>{
+          const raw=XLSX.utils.sheet_to_json<Cell[]>(wb.Sheets[name],{header:1,defval:null,raw:true})
+          if(!raw.length) return
+          const width=Math.max(...raw.map(r=>r.length))
+          const hdr=Array.from({length:width},(_,i)=>cleanText(raw[0][i]).trim()||'字段 '+(i+1))
+          added.push({id:uid(),fileName:file.name,sheetName:name,headers:hdr,rows:raw.slice(1).map(r=>Array.from({length:width},(_,i)=>r[i]??null))})
+        })
+      }
+      if(!added.length) throw new Error('没有读取到有效工作表，请检查文件格式和内容。')
+      setDatasets(ds=>[...ds,...added]);setActiveId(added[0].id);setTab('table');setHistory([]);setQuery('');setFilters([]);setMessage('成功导入 '+added.length+' 个工作表。')
+    } catch(e){setMessage(e instanceof Error?e.message:'文件读取失败。')}
+    finally {setBusy(false);if(inputRef.current)inputRef.current.value=''}
+  }
+  function exportCurrent(format:'xlsx'|'csv') {
+    if(!current) return
+    const data=[headers,...rows].map(row=>row.map(v=>v instanceof Date? v.toISOString():v))
+    if(format==='csv'){
+      const csv=data.map(row=>row.map(v=>{const s=cleanText(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n')
+      const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'})
+      downloadBlob(blob,current.sheetName+'.csv')
+    }else{
+      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(data),current.sheetName.slice(0,31)||'数据')
+      XLSX.writeFile(wb,current.sheetName+'.xlsx')
     }
   }
-
-  function reset() {
-    setFileName('')
-    setSheets([])
-    setActiveSheet('')
-    setError('')
-    if (inputRef.current) inputRef.current.value = ''
+  function exportPivot(){
+    if(!pivot.length) return
+    const cols=[...new Set(pivot.flatMap(p=>p.cells.map((_,i)=>i)))]
+    const data=[[pivotRow,...cols.map(i=>'分组 '+(i+1)),'汇总'],...pivot.map(p=>[p.name,...p.cells,p.total])]
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(data),'数据透视')
+    XLSX.writeFile(wb,'数据透视结果.xlsx')
   }
+  function undo(){
+    const last=history[history.length-1];if(!last)return
+    setDatasets(last.before);setHistory(h=>h.slice(0,-1));setMessage('已撤销：'+last.label)
+  }
+  function addFilter(){
+    if(headers.length)setFilters(f=>[...f,{column:headers[0],value:''}])
+  }
+  function cleanAction(kind:'trim'|'dedupe'|'empty'|'fill'|'upper'|'lower'){
+    if(!current)return
+    if(kind==='fill'){
+      const col=window.prompt('请输入要填充的字段名称：',headers[0]);if(!col||!headers.includes(col))return
+      const value=window.prompt('请输入填充值：','0');if(value===null)return
+      commit('填充空值：'+col,d=>({...d,rows:d.rows.map(r=>isBlank(r[d.headers.indexOf(col)])?r.map((v,i)=>i===d.headers.indexOf(col)?value:v):r)}));return
+    }
+    const labels={trim:'清理文本首尾空格',dedupe:'删除完全重复行',empty:'删除全空行',upper:'文本转大写',lower:'文本转小写'}
+    commit(labels[kind],d=>{
+      let next=d.rows.map(r=>r.map(v=>{
+        if(typeof v!=='string')return v
+        if(kind==='trim')return v.trim()
+        if(kind==='upper')return v.toLocaleUpperCase()
+        if(kind==='lower')return v.toLocaleLowerCase()
+        return v
+      }))
+      if(kind==='dedupe')next=[...new Map(next.map(r=>[JSON.stringify(r),r])).values()]
+      if(kind==='empty')next=next.filter(r=>r.some(v=>!isBlank(v)))
+      return {...d,rows:next}
+    })
+  }
+  const completeness=rows.length&&headers.length?Math.round(rows.reduce((s,r)=>s+r.filter(v=>!isBlank(v)).length,0)/(rows.length*headers.length)*100):100
+  const duplicateCount=rows.length-new Set(rows.map(r=>JSON.stringify(r))).size
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark"><Activity size={21} strokeWidth={2.6} /></div>
-          <div><strong>Data<span>Care</span></strong><small>DATA HEALTH CHECKER</small></div>
-        </div>
-        <div className="workspace-label">工作空间</div>
-        <nav>
-          <a className="nav-item active"><LayoutDashboard size={18} /> 数据概览</a>
-          <a className="nav-item"><ShieldCheck size={18} /> 数据体检 <span className="soon">当前</span></a>
-          <a className="nav-item muted"><Sparkles size={18} /> 数据清洗 <span className="lock">即将推出</span></a>
-          <a className="nav-item muted"><ClipboardList size={18} /> 处理历史</a>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="privacy-card"><div className="privacy-icon"><HardDrive size={17}/></div><div><b>本地隐私保护</b><p>文件只在你的浏览器内读取和分析，不会上传到应用服务器。</p></div><Check size={15} className="privacy-check"/></div>
-          <div className="profile"><div className="avatar">DH</div><div><b>个人工作区</b><small>免费使用 · 无需登录</small></div><CircleHelp size={17} className="help-icon"/></div>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <div className="breadcrumb">工作空间 <span>/</span> <b>数据体检</b></div>
-          <div className="top-actions"><span className="local-pill"><span/> 本地处理模式</span><button className="icon-button" aria-label="帮助"><CircleHelp size={18}/></button><div className="avatar small-avatar">DH</div></div>
-        </header>
-
-        <div className="content">
-          <section className="page-heading">
-            <div><div className="eyebrow"><span className="eyebrow-dot"/> DATA QUALITY WORKSPACE</div><h1>让数据更健康，<em>从一次体检开始。</em></h1><p>快速发现 Excel 和 CSV 中的潜在问题，让每一份数据都清晰、可靠、可用。</p></div>
-            <div className="heading-art"><div className="art-orbit orbit-one"/><div className="art-orbit orbit-two"/><div className="art-core"><Activity size={34}/></div><span className="art-spark spark-a">✦</span><span className="art-spark spark-b">✧</span></div>
+  return <div className="workbench">
+    <aside className="wb-sidebar">
+      <div className="wb-brand"><div className="wb-logo"><Activity size={21}/></div><div><b>Data<span>Workbench</span></b><small>LOCAL DATA STUDIO</small></div></div>
+      <div className="wb-label">工作空间</div>
+      <div className="wb-nav active"><LayoutDashboard size={17}/> 数据工作台</div>
+      <div className="wb-nav"><Table2 size={17}/> 数据表处理</div>
+      <div className="wb-nav"><WandSparkles size={17}/> 批量数据清洗</div>
+      <div className="wb-nav"><BarChart3 size={17}/> 数据透视</div>
+      <div className="wb-nav"><History size={17}/> 操作记录 <span>{history.length}</span></div>
+      <div className="wb-sidebar-bottom"><div className="wb-privacy"><ShieldCheck size={17}/><div><b>本地隐私模式</b><small>文件只在当前浏览器处理</small></div><Check size={14}/></div><small>Data Workbench · V1.0</small></div>
+    </aside>
+    <main className="wb-main">
+      <header className="wb-topbar"><div>工作空间 <span>/</span> <b>数据工作台</b></div><div className="wb-top-actions"><span className="local-tag"><i/> 本地处理</span><button className="wb-undo" disabled={!history.length} onClick={undo}><RotateCcw size={15}/> 撤销操作</button><button className="wb-import" onClick={()=>inputRef.current?.click()}><FilePlus2 size={16}/> 导入文件</button><input ref={inputRef} hidden multiple type="file" accept=".xlsx,.xls,.csv" onChange={e=>void importFiles(e.target.files)}/></div></header>
+      <div className="wb-content">
+        <section className="wb-hero"><div><div className="wb-eyebrow"><Sparkles size={13}/> DATA PREPARATION & ANALYSIS</div><h1>让繁琐的数据处理，<em>变成简单的工作流。</em></h1><p>导入、清洗、筛选、透视与导出，一站式完成数据准备工作。</p></div><div className="wb-hero-icon"><Activity size={34}/></div></section>
+        {!datasets.length?<section className="wb-empty-upload"><div className="wb-upload-icon"><FileSpreadsheet size={30}/></div><h2>创建你的数据工作区</h2><p>支持一次导入多个 Excel / CSV 文件及多个工作表</p><button onClick={()=>inputRef.current?.click()} className="wb-primary"><FilePlus2 size={16}/> 选择数据文件</button><div className="wb-formats">XLSX · XLS · CSV <span/> 浏览器本地解析 · 不上传数据</div>{busy&&<p>正在读取文件…</p>}</section>:<>
+          <div className="wb-dataset-strip"><div className="wb-dataset-tabs">{datasets.map(d=><button key={d.id} className={d.id===activeId?'selected':''} onClick={()=>{setActiveId(d.id);setFilters([]);setQuery('')}}><FileSpreadsheet size={14}/>{d.fileName} / {d.sheetName}<X size={12} onClick={e=>{e.stopPropagation();setDatasets(ds=>ds.filter(x=>x.id!==d.id));if(activeId===d.id)setActiveId(datasets.find(x=>x.id!==d.id)?.id??'')}}/></button>)}</div><button className="wb-add-file" onClick={()=>inputRef.current?.click()}><FilePlus2 size={14}/> 添加文件</button></div>
+          <div className="wb-stats"><div><span>数据记录</span><b>{rows.length.toLocaleString()} <small>行</small></b></div><div><span>字段数量</span><b>{headers.length} <small>列</small></b></div><div><span>数据完整率</span><b>{completeness}%</b></div><div><span>完全重复行</span><b>{duplicateCount.toLocaleString()} <small>行</small></b></div></div>
+          <section className="wb-panel">
+            <div className="wb-panel-head"><div className="wb-tabs"><button className={tab==='table'?'on':''} onClick={()=>setTab('table')}><Table2 size={15}/> 数据表</button><button className={tab==='clean'?'on':''} onClick={()=>setTab('clean')}><WandSparkles size={15}/> 数据清洗</button><button className={tab==='pivot'?'on':''} onClick={()=>setTab('pivot')}><BarChart3 size={15}/> 数据透视</button></div><div className="wb-export"><button onClick={()=>exportCurrent('csv')}><Download size={14}/> CSV</button><button onClick={()=>exportCurrent('xlsx')}><Download size={14}/> Excel</button></div></div>
+            {tab==='table'&&<><div className="wb-toolbar"><div className="wb-search"><Search size={15}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索所有字段…"/></div><button onClick={addFilter}><Filter size={14}/> 添加筛选条件</button><span>{filteredRows.length.toLocaleString()} / {rows.length.toLocaleString()} 行</span></div>
+              {filters.length>0&&<div className="wb-filter-list">{filters.map((f,i)=><div key={i}><select value={f.column} onChange={e=>setFilters(fs=>fs.map((x,j)=>i===j?{...x,column:e.target.value}:x))}>{headers.map(h=><option key={h}>{h}</option>)}</select><input value={f.value} onChange={e=>setFilters(fs=>fs.map((x,j)=>i===j?{...x,value:e.target.value}:x))} placeholder="包含文本…"/><button onClick={()=>setFilters(fs=>fs.filter((_,j)=>j!==i))}><X size={14}/></button></div>)}<button onClick={()=>setFilters([])}>清除筛选</button></div>}
+              <div className="wb-table-scroll"><table className="wb-table"><thead><tr><th>#</th>{headers.map((h,i)=><th key={i} onClick={()=>setSort(s=>s?.col===i?{col:i,dir:s.dir==='asc'?'desc':'asc'}:{col:i,dir:'asc'})}>{h}<ArrowDownUp size={11}/></th>)}</tr></thead><tbody>{filteredRows.slice(0,500).map(({row,index})=><tr key={index}><td>{index+1}</td>{headers.map((_,i)=><td key={i}>{isBlank(row[i])?<span className="wb-null">空值</span>:cleanText(row[i])}</td>)}</tr>)}</tbody></table>{filteredRows.length>500&&<div className="wb-limit">当前预览前 500 行；筛选和导出作用于全部匹配记录。</div>}</div></>}
+            {tab==='clean'&&<div className="wb-clean-area"><div className="wb-clean-intro"><h3><WandSparkles size={17}/> 批量数据清洗</h3><p>选择处理动作，系统将在当前工作副本上批量执行。每次操作都可以撤销。</p></div><div className="wb-clean-grid">
+              <button onClick={()=>cleanAction('trim')}><span><Sparkles size={18}/></span><b>清理首尾空格</b><small>去除文本字段前后多余空格</small></button>
+              <button onClick={()=>cleanAction('dedupe')}><span><Rows3 size={18}/></span><b>删除完全重复行</b><small>保留首次出现的记录</small></button>
+              <button onClick={()=>cleanAction('empty')}><span><Trash2 size={18}/></span><b>删除全空行</b><small>移除没有任何内容的记录</small></button>
+              <button onClick={()=>cleanAction('fill')}><span><Columns3 size={18}/></span><b>填充指定字段空值</b><small>指定字段与填充值，谨慎执行</small></button>
+              <button onClick={()=>cleanAction('upper')}><span><WandSparkles size={18}/></span><b>文本转大写</b><small>批量转换文本字段</small></button>
+              <button onClick={()=>cleanAction('lower')}><span><WandSparkles size={18}/></span><b>文本转小写</b><small>批量转换文本字段</small></button>
+            </div><div className="wb-safe-note"><ShieldCheck size={16}/> 原始文件不会被修改。处理结果只存在当前浏览器工作区，导出后才会生成新文件。</div></div>}
+            {tab==='pivot'&&<div className="wb-pivot-area"><div className="wb-pivot-config"><div><label>行字段</label><select value={pivotRow} onChange={e=>setPivotRow(e.target.value)}><option value="">选择分组字段</option>{headers.map(h=><option key={h}>{h}</option>)}</select></div><div><label>列字段（可选）</label><select value={pivotCol} onChange={e=>setPivotCol(e.target.value)}><option value="">不拆分列</option>{headers.filter(h=>h!==pivotRow).map(h=><option key={h}>{h}</option>)}</select></div><div><label>数值字段</label><select value={pivotValue} onChange={e=>setPivotValue(e.target.value)}><option value="">按记录计数</option>{headers.map(h=><option key={h}>{h}</option>)}</select></div><div><label>汇总方式</label><select value={pivotAgg} onChange={e=>setPivotAgg(e.target.value as typeof pivotAgg)}><option value="sum">求和</option><option value="count">计数</option><option value="average">平均值</option></select></div></div>
+              {pivotRow?<><div className="wb-pivot-result-head"><b>透视结果</b><button onClick={exportPivot}><Download size={14}/> 导出透视结果</button></div><div className="wb-table-scroll"><table className="wb-table"><thead><tr><th>{pivotRow}</th>{pivot[0]?.cells.map((_,i)=><th key={i}>{pivotCol||'汇总 '+(i+1)}</th>)}<th>汇总</th></tr></thead><tbody>{pivot.map((p,i)=><tr key={i}><td>{p.name}</td>{p.cells.map((n,j)=><td key={j}>{Number(n.toFixed(2)).toLocaleString()}</td>)}<td>{Number(p.total.toFixed(2)).toLocaleString()}</td></tr>)}</tbody></table></div></>:<div className="wb-pivot-empty"><BarChart3 size={27}/><b>配置字段，生成数据透视表</b><small>选择行字段后即可按类别汇总数据</small></div>}
+            </div>}
           </section>
-
-          {!fileName ? (
-            <>
-              <section className="upload-panel">
-                <div className="section-top"><div><h2>开始数据体检</h2><p>上传文件，系统将自动读取并分析数据质量。</p></div><span className="step-tag"><span>01</span> 上传数据</span></div>
-                <div className={`dropzone ${dragging ? 'dragging' : ''}`}
-                  onDragOver={(event) => { event.preventDefault(); setDragging(true) }}
-                  onDragLeave={() => setDragging(false)}
-                  onDrop={(event) => { event.preventDefault(); setDragging(false); void loadFile(event.dataTransfer.files[0]) }}>
-                  <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(event) => void loadFile(event.target.files?.[0])}/>
-                  <div className="upload-icon"><CloudUpload size={29}/></div>
-                  <h3>拖拽文件到这里，或 <button className="text-button" onClick={() => inputRef.current?.click()}>点击上传</button></h3>
-                  <p>支持 Excel 工作簿和 CSV 文件，单个文件最大建议 20 MB</p>
-                  <div className="privacy-note"><ShieldCheck size={15}/><span><b>隐私说明：</b>文件内容仅在当前浏览器处理，不会上传到应用服务器或发送给第三方。点击“移除文件”可清除当前工作区中的数据。</span></div>
-                  <div className="file-types"><span><FileSpreadsheet size={15}/> XLSX / XLS</span><span><FileText size={15}/> CSV</span><span><ShieldCheck size={15}/> 安全本地解析</span></div>
-                </div>
-                {error && <div className="error-message"><AlertCircle size={16}/>{error}</div>}
-                {busy && <div className="loading-line"><RefreshCw size={15} className="spin"/> 正在读取文件…</div>}
-              </section>
-
-              <section className="features-section"><div className="section-title-row"><div><h2>一次体检，全面了解数据质量</h2><p>从完整性、唯一性、有效性和一致性四个维度发现问题。</p></div><span className="light-label">核心检测能力</span></div>
-                <div className="feature-grid">
-                  <div className="feature-card"><div className="feature-icon blue"><Table2 size={19}/></div><b>缺失值检测</b><p>识别空单元格、空字符串和字段缺失。</p><span>COMPLETENESS <ArrowUpRight size={13}/></span></div>
-                  <div className="feature-card"><div className="feature-icon violet"><CopyIcon/></div><b>重复数据检测</b><p>发现完全重复记录，辅助识别重复主键。</p><span>UNIQUENESS <ArrowUpRight size={13}/></span></div>
-                  <div className="feature-card"><div className="feature-icon amber"><AlertCircle size={19}/></div><b>类型与异常检测</b><p>识别类型混杂、格式异常和可疑数值。</p><span>VALIDITY <ArrowUpRight size={13}/></span></div>
-                  <div className="feature-card"><div className="feature-icon green"><RefreshCw size={19}/></div><b>字段一致性</b><p>检查空格、大小写和文本格式差异。</p><span>CONSISTENCY <ArrowUpRight size={13}/></span></div>
-                </div>
-              </section>
-              <footer className="footer"><span>© 2026 DataCare · Data Health Checker</span><span><ShieldCheck size={14}/> 数据安全优先 <i/> 当前版本 v0.1.0</span></footer>
-            </>
-          ) : (
-            <>
-              <section className="file-banner"><div className="file-symbol"><FileSpreadsheet size={22}/></div><div className="file-meta"><b>{fileName}</b><small>{sheets.length} 个工作表 · 已在浏览器本地读取</small></div><button className="outline-button" onClick={reset}><Trash2 size={15}/> 移除文件</button></section>
-              <div className="metrics-grid">
-                <Metric label="数据记录" value={stats.rowCount.toLocaleString()} suffix="行" icon={<Table2/>} tone="blue"/>
-                <Metric label="字段数量" value={String(stats.colCount)} suffix="列" icon={<FileSpreadsheet/>} tone="violet"/>
-                <Metric label="缺失单元格" value={stats.missing.toLocaleString()} suffix="个" icon={<AlertCircle/>} tone="amber"/>
-                <Metric label="完全重复行" value={stats.duplicate.toLocaleString()} suffix="行" icon={<RefreshCw/>} tone="green"/>
-              </div>
-              <section className="profile-panel">
-                <div className="profile-heading">
-                  <div><h2>字段级质量分析</h2><p>逐列查看缺失率、唯一值、重复值和推断类型</p></div>
-                  <span className="profile-count">{columnProfiles.length} 个字段</span>
-                </div>
-                {columnProfiles.length ? (
-                  <div className="profile-table-wrap">
-                    <table className="profile-table">
-                      <thead><tr><th>字段名称</th><th>推断类型</th><th>缺失值</th><th>缺失率</th><th>唯一值</th><th>重复值</th><th>示例值</th></tr></thead>
-                      <tbody>{columnProfiles.map((column, index) => (
-                        <tr key={index}>
-                          <td><b>{column.name}</b></td>
-                          <td><span className={`type-chip ${column.typeLabel === '混合类型' ? 'mixed' : ''}`}>{column.typeLabel}</span></td>
-                          <td>{column.missing.toLocaleString()}</td>
-                          <td><div className="missing-cell"><span>{column.missingRate}%</span><div className="missing-track"><i style={{ width: `${column.missingRate}%` }} /></div></div></td>
-                          <td>{column.unique.toLocaleString()}</td>
-                          <td>{column.repeated.toLocaleString()}</td>
-                          <td><div className="sample-values">{column.samples.length ? column.samples.map((sample, sampleIndex) => <span key={sampleIndex} title={sample}>{sample}</span>) : <span className="no-sample">暂无</span>}</div></td>
-                        </tr>
-                      ))}</tbody>
-                    </table>
-                  </div>
-                ) : <div className="empty-state">没有可分析的字段。</div>}
-              </section>
-              <section className="data-panel"><div className="data-panel-head"><div><h2>数据预览</h2><p>已读取数据 · 当前展示前 100 条记录</p></div><div className="sheet-select-wrap"><label>工作表</label><div className="select-shell"><select value={activeSheet} onChange={(event) => setActiveSheet(event.target.value)}>{sheets.map((sheet) => <option key={sheet.name}>{sheet.name}</option>)}</select><ChevronDown size={15}/></div></div></div>
-                <div className="table-wrap"><table><thead><tr><th className="row-num">#</th>{headers.map((header, index) => <th key={index}>{header}</th>)}</tr></thead><tbody>{records.slice(0,100).map((row, rowIndex) => <tr key={rowIndex}><td className="row-num">{rowIndex + 1}</td>{headers.map((_, colIndex) => <td key={colIndex}>{row[colIndex] === null || row[colIndex] === undefined || row[colIndex] === '' ? <span className="empty-cell">空值</span> : String(row[colIndex])}</td>)}</tr>)}</tbody></table>{!records.length && <div className="empty-state">当前工作表没有可预览的数据行。</div>}</div>
-                <div className="table-foot"><span>共 {stats.rowCount.toLocaleString()} 条记录</span><span>完整性 <b>{stats.completeness}%</b></span></div>
-              </section>
-              <div className="next-step"><div><b><Sparkles size={17}/> 数据读取完成</b><p>基础体检指标已生成。更深入的字段分析与清洗操作将在后续版本开放。</p></div><button className="primary-button" disabled>深入体检 <ArrowUpRight size={16}/></button></div>
-              <footer className="footer"><span>© 2026 DataCare · Data Health Checker</span><span><ShieldCheck size={14}/> 数据仅在本地处理 <i/> v0.1.0</span></footer>
-            </>
-          )}
-        </div>
-      </main>
-    </div>
-  )
+          <div className="wb-bottom-info"><span><ShieldCheck size={14}/> 文件内容仅在本地浏览器处理</span><span>当前工作区：{datasets.length} 个工作表</span></div>
+        </>}
+        {message&&<div className="wb-toast" role="status">{message}<button onClick={()=>setMessage('')}><X size={14}/></button></div>}
+      </div>
+    </main>
+  </div>
 }
-
-function inferCellType(value: Cell): 'number' | 'date' | 'boolean' | 'text' {
-  if (typeof value === 'number') return 'number'
-  if (typeof value === 'boolean') return 'boolean'
-  if (value instanceof Date) return 'date'
-  const text = String(value ?? '').trim()
-  if (/^(true|false|是|否)$/i.test(text)) return 'boolean'
-  if (/^[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?%?$/i.test(text.replace(/,/g, ''))) return 'number'
-  if (/^\\d{4}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?$/.test(text)) return 'date'
-  return 'text'
-}
-
-function CopyIcon() { return <ClipboardList size={19}/> }
-function Metric({ label, value, suffix, icon, tone }: { label: string; value: string; suffix: string; icon: ReactNode; tone: string }) {
-  return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><div><span>{label}</span><strong>{value}<small>{suffix}</small></strong></div></div>
-}
-
+function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)}
 export default App
