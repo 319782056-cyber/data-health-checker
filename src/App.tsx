@@ -1,197 +1,155 @@
 import { useMemo, useRef, useState } from 'react'
+import { HashRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import {
-  Activity, ArrowDownUp, BarChart3, Check, Download, FilePlus2,
-  FileSpreadsheet, Filter, History, LayoutDashboard, Search, ShieldCheck,
-  Sparkles, Table2, Trash2, WandSparkles, X, RotateCcw, Columns3, Rows3
+  Activity, ArrowDown, ArrowUp, BarChart3, Bot, Check, ChevronDown, CircleHelp,
+  Combine, Database, Download, FilePlus2, FileSpreadsheet, History, LayoutDashboard,
+  Menu, Moon, MoreHorizontal, Search, Settings2, ShieldCheck, Sparkles, Table2,
+  WandSparkles, Workflow, X
 } from 'lucide-react'
+import './v2.css'
 
 type Cell = string | number | boolean | Date | null
 type Dataset = { id: string; fileName: string; sheetName: string; headers: string[]; rows: Cell[][] }
-type FilterRule = { column: string; value: string }
-type HistoryItem = { label: string; before: Dataset[] }
+type Mode = 'simple' | 'professional'
+type Step = { id: string; label: string; detail: string }
 const uid = () => Math.random().toString(36).slice(2, 10)
-const cleanText = (v: Cell) => v instanceof Date ? v.toISOString().slice(0,10) : String(v ?? '')
-const isBlank = (v: Cell) => v === null || v === undefined || String(v).trim() === ''
+const cellText = (v: Cell) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? '')
+const blank = (v: Cell) => v == null || String(v).trim() === ''
 
-function App() {
-  const inputRef = useRef<HTMLInputElement>(null)
+const nav = [
+  { to: '/overview', label: '数据总览', icon: LayoutDashboard },
+  { to: '/data', label: '数据浏览', icon: Table2 },
+  { to: '/transform', label: '智能处理', icon: WandSparkles },
+  { to: '/merge', label: '多表合并', icon: Combine },
+  { to: '/analysis', label: '数据分析', icon: BarChart3 },
+  { to: '/workflows', label: '自动化流程', icon: Workflow },
+  { to: '/activity', label: '操作记录', icon: History },
+]
+const titleMap: Record<string, string> = Object.fromEntries(nav.map(n => [n.to, n.label]))
+
+function AppShell() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [activeId, setActiveId] = useState('')
-  const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState<FilterRule[]>([])
-  const [sort, setSort] = useState<{col:number;dir:'asc'|'desc'}|null>(null)
-  const [history, setHistory] = useState<HistoryItem[]>([])
-  const [tab, setTab] = useState<'table'|'clean'|'pivot'>('table')
-  const [pivotRow, setPivotRow] = useState('')
-  const [pivotCol, setPivotCol] = useState('')
-  const [pivotValue, setPivotValue] = useState('')
-  const [pivotAgg, setPivotAgg] = useState<'sum'|'count'|'average'>('sum')
+  const [mode, setMode] = useState<Mode>('simple')
+  const [steps, setSteps] = useState<Step[]>([])
+  const [history, setHistory] = useState<string[]>([])
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const current = datasets.find(d => d.id === activeId)
-  const headers = current?.headers ?? []
-  const rows = current?.rows ?? []
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const current = datasets.find(d => d.id === activeId) ?? datasets[0]
+  const location = useLocation()
+  const pageTitle = titleMap[location.pathname] ?? '数据总览'
 
-  const filteredRows = useMemo(() => {
-    let result = rows.map((row,index)=>({row,index})).filter(({row}) => {
-      const q = query.trim().toLowerCase()
-      if(q && !row.some(v=>cleanText(v).toLowerCase().includes(q))) return false
-      return filters.every(f => {
-        if(!f.value.trim()) return true
-        const i=headers.indexOf(f.column)
-        return i < 0 || cleanText(row[i]).toLowerCase().includes(f.value.toLowerCase())
-      })
-    })
-    if(sort) result = [...result].sort((a,b)=>{
-      const av=a.row[sort.col], bv=b.row[sort.col]
-      const an=Number(av), bn=Number(bv)
-      const bothNumeric=String(av??'').trim()!=='' && String(bv??'').trim()!=='' && Number.isFinite(an) && Number.isFinite(bn)
-      const cmp=bothNumeric ? an-bn : cleanText(av).localeCompare(cleanText(bv),'zh-CN',{numeric:true,sensitivity:'base'})
-      return sort.dir==='asc'?cmp:-cmp
-    })
-    return result
-  },[rows,query,filters,headers,sort])
-
-  const pivot = useMemo(() => {
-    if(!current || !pivotRow) return []
-    const ri=headers.indexOf(pivotRow), ci=pivotCol?headers.indexOf(pivotCol):-1, vi=pivotValue?headers.indexOf(pivotValue):-1
-    const groups=new Map<string,Map<string,number[]>>()
-    rows.forEach(row=>{
-      const r=cleanText(row[ri])||'(空白)', c=ci<0?'总计':cleanText(row[ci])||'(空白)'
-      if(!groups.has(r)) groups.set(r,new Map())
-      const inner=groups.get(r)!
-      if(!inner.has(c)) inner.set(c,[])
-      const n=vi<0?1:Number(row[vi])
-      if(pivotAgg==='count') inner.get(c)!.push(1)
-      else if(Number.isFinite(n)) inner.get(c)!.push(n)
-    })
-    const cols=[...new Set([...groups.values()].flatMap(m=>[...m.keys()]))]
-    return [...groups.entries()].map(([name,values])=>{
-      const cells=cols.map(c=>{const arr=values.get(c)??[];return pivotAgg==='count'?arr.length:pivotAgg==='average'?(arr.length?arr.reduce((a,b)=>a+b,0)/arr.length:0):arr.reduce((a,b)=>a+b,0)})
-      return {name,cells,total:cells.reduce((a,b)=>a+b,0)}
-    }).concat([{name:'总计',cells:cols.map((_,i)=>[...groups.values()].reduce((s,m)=>{const a=m.get(cols[i])??[];return s+(pivotAgg==='count'?a.length:pivotAgg==='average'?(a.length?a.reduce((x,y)=>x+y,0)/a.length:0):a.reduce((x,y)=>x+y,0))},0)),total:0}])
-  },[current,headers,rows,pivotRow,pivotCol,pivotValue,pivotAgg])
-
-  function commit(label:string, transform:(d:Dataset)=>Dataset) {
-    if(!current) return
-    setHistory(h=>[...h.slice(-19),{label,before:datasets}])
-    setDatasets(ds=>ds.map(d=>d.id===activeId?transform(d):d))
-    setMessage(label+'，已完成；可撤销。')
-  }
-  async function importFiles(files:FileList|null) {
-    if(!files?.length) return
-    setBusy(true);setMessage('')
+  async function importFiles(files: FileList | null) {
+    if (!files?.length) return
+    setBusy(true); setMessage('')
     try {
-      const added:Dataset[]=[]
-      for(const file of Array.from(files)){
-        const ext=file.name.split('.').pop()?.toLowerCase()
-        if(!['xlsx','xls','csv'].includes(ext??'')) continue
-        const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true})
-        wb.SheetNames.forEach(name=>{
-          const raw=XLSX.utils.sheet_to_json<Cell[]>(wb.Sheets[name],{header:1,defval:null,raw:true})
-          if(!raw.length) return
-          const width=Math.max(...raw.map(r=>r.length))
-          const hdr=Array.from({length:width},(_,i)=>cleanText(raw[0][i]).trim()||'字段 '+(i+1))
-          added.push({id:uid(),fileName:file.name,sheetName:name,headers:hdr,rows:raw.slice(1).map(r=>Array.from({length:width},(_,i)=>r[i]??null))})
+      const added: Dataset[] = []
+      for (const file of Array.from(files)) {
+        const ext = file.name.split('.').pop()?.toLowerCase()
+        if (!['xlsx', 'xls', 'csv'].includes(ext ?? '')) continue
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+        workbook.SheetNames.forEach(sheetName => {
+          const raw = XLSX.utils.sheet_to_json<Cell[]>(workbook.Sheets[sheetName], { header: 1, defval: null, raw: true })
+          if (!raw.length) return
+          const width = Math.max(...raw.map(row => row.length))
+          const headers = Array.from({ length: width }, (_, i) => cellText(raw[0][i]).trim() || '字段 ' + (i + 1))
+          added.push({ id: uid(), fileName: file.name, sheetName, headers, rows: raw.slice(1).map(row => Array.from({ length: width }, (_, i) => row[i] ?? null)) })
         })
       }
-      if(!added.length) throw new Error('没有读取到有效工作表，请检查文件格式和内容。')
-      setDatasets(ds=>[...ds,...added]);setActiveId(added[0].id);setTab('table');setHistory([]);setQuery('');setFilters([]);setMessage('成功导入 '+added.length+' 个工作表。')
-    } catch(e){setMessage(e instanceof Error?e.message:'文件读取失败。')}
-    finally {setBusy(false);if(inputRef.current)inputRef.current.value=''}
+      if (!added.length) throw new Error('没有读取到有效工作表，请检查文件格式。')
+      setDatasets(prev => [...prev, ...added]); setActiveId(added[0].id)
+      setMessage('已导入 ' + added.length + ' 个工作表。')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '导入失败') }
+    finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
   }
-  function exportCurrent(format:'xlsx'|'csv') {
-    if(!current) return
-    const data=[headers,...rows].map(row=>row.map(v=>v instanceof Date? v.toISOString():v))
-    if(format==='csv'){
-      const csv=data.map(row=>row.map(v=>{const s=cleanText(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n')
-      const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'})
-      downloadBlob(blob,current.sheetName+'.csv')
-    }else{
-      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(data),current.sheetName.slice(0,31)||'数据')
-      XLSX.writeFile(wb,current.sheetName+'.xlsx')
-    }
+  function record(label: string) { setHistory(prev => [label, ...prev]); setMessage(label + '：已记录。') }
+  function exportCurrent() {
+    if (!current) return
+    const rows = [current.headers, ...current.rows].map(row => row.map(v => v instanceof Date ? v.toISOString() : v))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), current.sheetName.slice(0, 31) || '数据')
+    XLSX.writeFile(wb, current.fileName.replace(/\.[^.]+$/, '') + '_导出.xlsx')
   }
-  function exportPivot(){
-    if(!pivot.length) return
-    const cols=[...new Set(pivot.flatMap(p=>p.cells.map((_,i)=>i)))]
-    const data=[[pivotRow,...cols.map(i=>'分组 '+(i+1)),'汇总'],...pivot.map(p=>[p.name,...p.cells,p.total])]
-    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(data),'数据透视')
-    XLSX.writeFile(wb,'数据透视结果.xlsx')
-  }
-  function undo(){
-    const last=history[history.length-1];if(!last)return
-    setDatasets(last.before);setHistory(h=>h.slice(0,-1));setMessage('已撤销：'+last.label)
-  }
-  function addFilter(){
-    if(headers.length)setFilters(f=>[...f,{column:headers[0],value:''}])
-  }
-  function cleanAction(kind:'trim'|'dedupe'|'empty'|'fill'|'upper'|'lower'){
-    if(!current)return
-    if(kind==='fill'){
-      const col=window.prompt('请输入要填充的字段名称：',headers[0]);if(!col||!headers.includes(col))return
-      const value=window.prompt('请输入填充值：','0');if(value===null)return
-      commit('填充空值：'+col,d=>({...d,rows:d.rows.map(r=>isBlank(r[d.headers.indexOf(col)])?r.map((v,i)=>i===d.headers.indexOf(col)?value:v):r)}));return
-    }
-    const labels={trim:'清理文本首尾空格',dedupe:'删除完全重复行',empty:'删除全空行',upper:'文本转大写',lower:'文本转小写'}
-    commit(labels[kind],d=>{
-      let next=d.rows.map(r=>r.map(v=>{
-        if(typeof v!=='string')return v
-        if(kind==='trim')return v.trim()
-        if(kind==='upper')return v.toLocaleUpperCase()
-        if(kind==='lower')return v.toLocaleLowerCase()
-        return v
-      }))
-      if(kind==='dedupe')next=[...new Map(next.map(r=>[JSON.stringify(r),r])).values()]
-      if(kind==='empty')next=next.filter(r=>r.some(v=>!isBlank(v)))
-      return {...d,rows:next}
-    })
-  }
-  const completeness=rows.length&&headers.length?Math.round(rows.reduce((s,r)=>s+r.filter(v=>!isBlank(v)).length,0)/(rows.length*headers.length)*100):100
-  const duplicateCount=rows.length-new Set(rows.map(r=>JSON.stringify(r))).size
-
-  return <div className="workbench">
-    <aside className="wb-sidebar">
-      <div className="wb-brand"><div className="wb-logo"><Activity size={21}/></div><div><b>Data<span>Workbench</span></b><small>LOCAL DATA STUDIO</small></div></div>
-      <div className="wb-label">工作空间</div>
-      <div className="wb-nav active"><LayoutDashboard size={17}/> 数据工作台</div>
-      <div className="wb-nav"><Table2 size={17}/> 数据表处理</div>
-      <div className="wb-nav"><WandSparkles size={17}/> 批量数据清洗</div>
-      <div className="wb-nav"><BarChart3 size={17}/> 数据透视</div>
-      <div className="wb-nav"><History size={17}/> 操作记录 <span>{history.length}</span></div>
-      <div className="wb-sidebar-bottom"><div className="wb-privacy"><ShieldCheck size={17}/><div><b>本地隐私模式</b><small>文件只在当前浏览器处理</small></div><Check size={14}/></div><small>Data Workbench · V1.0</small></div>
-    </aside>
-    <main className="wb-main">
-      <header className="wb-topbar"><div>工作空间 <span>/</span> <b>数据工作台</b></div><div className="wb-top-actions"><span className="local-tag"><i/> 本地处理</span><button className="wb-undo" disabled={!history.length} onClick={undo}><RotateCcw size={15}/> 撤销操作</button><button className="wb-import" onClick={()=>inputRef.current?.click()}><FilePlus2 size={16}/> 导入文件</button><input ref={inputRef} hidden multiple type="file" accept=".xlsx,.xls,.csv" onChange={e=>void importFiles(e.target.files)}/></div></header>
-      <div className="wb-content">
-        <section className="wb-hero"><div><div className="wb-eyebrow"><Sparkles size={13}/> DATA PREPARATION & ANALYSIS</div><h1>让繁琐的数据处理，<em>变成简单的工作流。</em></h1><p>导入、清洗、筛选、透视与导出，一站式完成数据准备工作。</p></div><div className="wb-hero-icon"><Activity size={34}/></div></section>
-        {!datasets.length?<section className="wb-empty-upload"><div className="wb-upload-icon"><FileSpreadsheet size={30}/></div><h2>创建你的数据工作区</h2><p>支持一次导入多个 Excel / CSV 文件及多个工作表</p><button onClick={()=>inputRef.current?.click()} className="wb-primary"><FilePlus2 size={16}/> 选择数据文件</button><div className="wb-formats">XLSX · XLS · CSV <span/> 浏览器本地解析 · 不上传数据</div>{busy&&<p>正在读取文件…</p>}</section>:<>
-          <div className="wb-dataset-strip"><div className="wb-dataset-tabs">{datasets.map(d=><button key={d.id} className={d.id===activeId?'selected':''} onClick={()=>{setActiveId(d.id);setFilters([]);setQuery('')}}><FileSpreadsheet size={14}/>{d.fileName} / {d.sheetName}<X size={12} onClick={e=>{e.stopPropagation();setDatasets(ds=>ds.filter(x=>x.id!==d.id));if(activeId===d.id)setActiveId(datasets.find(x=>x.id!==d.id)?.id??'')}}/></button>)}</div><button className="wb-add-file" onClick={()=>inputRef.current?.click()}><FilePlus2 size={14}/> 添加文件</button></div>
-          <div className="wb-stats"><div><span>数据记录</span><b>{rows.length.toLocaleString()} <small>行</small></b></div><div><span>字段数量</span><b>{headers.length} <small>列</small></b></div><div><span>数据完整率</span><b>{completeness}%</b></div><div><span>完全重复行</span><b>{duplicateCount.toLocaleString()} <small>行</small></b></div></div>
-          <section className="wb-panel">
-            <div className="wb-panel-head"><div className="wb-tabs"><button className={tab==='table'?'on':''} onClick={()=>setTab('table')}><Table2 size={15}/> 数据表</button><button className={tab==='clean'?'on':''} onClick={()=>setTab('clean')}><WandSparkles size={15}/> 数据清洗</button><button className={tab==='pivot'?'on':''} onClick={()=>setTab('pivot')}><BarChart3 size={15}/> 数据透视</button></div><div className="wb-export"><button onClick={()=>exportCurrent('csv')}><Download size={14}/> CSV</button><button onClick={()=>exportCurrent('xlsx')}><Download size={14}/> Excel</button></div></div>
-            {tab==='table'&&<><div className="wb-toolbar"><div className="wb-search"><Search size={15}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索所有字段…"/></div><button onClick={addFilter}><Filter size={14}/> 添加筛选条件</button><span>{filteredRows.length.toLocaleString()} / {rows.length.toLocaleString()} 行</span></div>
-              {filters.length>0&&<div className="wb-filter-list">{filters.map((f,i)=><div key={i}><select value={f.column} onChange={e=>setFilters(fs=>fs.map((x,j)=>i===j?{...x,column:e.target.value}:x))}>{headers.map(h=><option key={h}>{h}</option>)}</select><input value={f.value} onChange={e=>setFilters(fs=>fs.map((x,j)=>i===j?{...x,value:e.target.value}:x))} placeholder="包含文本…"/><button onClick={()=>setFilters(fs=>fs.filter((_,j)=>j!==i))}><X size={14}/></button></div>)}<button onClick={()=>setFilters([])}>清除筛选</button></div>}
-              <div className="wb-table-scroll"><table className="wb-table"><thead><tr><th>#</th>{headers.map((h,i)=><th key={i} onClick={()=>setSort(s=>s?.col===i?{col:i,dir:s.dir==='asc'?'desc':'asc'}:{col:i,dir:'asc'})}>{h}<ArrowDownUp size={11}/></th>)}</tr></thead><tbody>{filteredRows.slice(0,500).map(({row,index})=><tr key={index}><td>{index+1}</td>{headers.map((_,i)=><td key={i}>{isBlank(row[i])?<span className="wb-null">空值</span>:cleanText(row[i])}</td>)}</tr>)}</tbody></table>{filteredRows.length>500&&<div className="wb-limit">当前预览前 500 行；筛选和导出作用于全部匹配记录。</div>}</div></>}
-            {tab==='clean'&&<div className="wb-clean-area"><div className="wb-clean-intro"><h3><WandSparkles size={17}/> 批量数据清洗</h3><p>选择处理动作，系统将在当前工作副本上批量执行。每次操作都可以撤销。</p></div><div className="wb-clean-grid">
-              <button onClick={()=>cleanAction('trim')}><span><Sparkles size={18}/></span><b>清理首尾空格</b><small>去除文本字段前后多余空格</small></button>
-              <button onClick={()=>cleanAction('dedupe')}><span><Rows3 size={18}/></span><b>删除完全重复行</b><small>保留首次出现的记录</small></button>
-              <button onClick={()=>cleanAction('empty')}><span><Trash2 size={18}/></span><b>删除全空行</b><small>移除没有任何内容的记录</small></button>
-              <button onClick={()=>cleanAction('fill')}><span><Columns3 size={18}/></span><b>填充指定字段空值</b><small>指定字段与填充值，谨慎执行</small></button>
-              <button onClick={()=>cleanAction('upper')}><span><WandSparkles size={18}/></span><b>文本转大写</b><small>批量转换文本字段</small></button>
-              <button onClick={()=>cleanAction('lower')}><span><WandSparkles size={18}/></span><b>文本转小写</b><small>批量转换文本字段</small></button>
-            </div><div className="wb-safe-note"><ShieldCheck size={16}/> 原始文件不会被修改。处理结果只存在当前浏览器工作区，导出后才会生成新文件。</div></div>}
-            {tab==='pivot'&&<div className="wb-pivot-area"><div className="wb-pivot-config"><div><label>行字段</label><select value={pivotRow} onChange={e=>setPivotRow(e.target.value)}><option value="">选择分组字段</option>{headers.map(h=><option key={h}>{h}</option>)}</select></div><div><label>列字段（可选）</label><select value={pivotCol} onChange={e=>setPivotCol(e.target.value)}><option value="">不拆分列</option>{headers.filter(h=>h!==pivotRow).map(h=><option key={h}>{h}</option>)}</select></div><div><label>数值字段</label><select value={pivotValue} onChange={e=>setPivotValue(e.target.value)}><option value="">按记录计数</option>{headers.map(h=><option key={h}>{h}</option>)}</select></div><div><label>汇总方式</label><select value={pivotAgg} onChange={e=>setPivotAgg(e.target.value as typeof pivotAgg)}><option value="sum">求和</option><option value="count">计数</option><option value="average">平均值</option></select></div></div>
-              {pivotRow?<><div className="wb-pivot-result-head"><b>透视结果</b><button onClick={exportPivot}><Download size={14}/> 导出透视结果</button></div><div className="wb-table-scroll"><table className="wb-table"><thead><tr><th>{pivotRow}</th>{pivot[0]?.cells.map((_,i)=><th key={i}>{pivotCol||'汇总 '+(i+1)}</th>)}<th>汇总</th></tr></thead><tbody>{pivot.map((p,i)=><tr key={i}><td>{p.name}</td>{p.cells.map((n,j)=><td key={j}>{Number(n.toFixed(2)).toLocaleString()}</td>)}<td>{Number(p.total.toFixed(2)).toLocaleString()}</td></tr>)}</tbody></table></div></>:<div className="wb-pivot-empty"><BarChart3 size={27}/><b>配置字段，生成数据透视表</b><small>选择行字段后即可按类别汇总数据</small></div>}
-            </div>}
-          </section>
-          <div className="wb-bottom-info"><span><ShieldCheck size={14}/> 文件内容仅在本地浏览器处理</span><span>当前工作区：{datasets.length} 个工作表</span></div>
-        </>}
-        {message&&<div className="wb-toast" role="status">{message}<button onClick={()=>setMessage('')}><X size={14}/></button></div>}
+  const context = { datasets, setDatasets, activeId, setActiveId, current, mode, setMode, steps, setSteps, history, record, importFiles, openImport: () => fileRef.current?.click(), exportCurrent }
+  return <div className="v2-shell">
+    <aside className={'v2-sidebar ' + (sidebarOpen ? 'open' : '')}>
+      <div className="v2-brand"><div className="v2-brand-icon"><Activity size={21}/></div><div><b>Data <span>Workbench</span></b><small>INTELLIGENT DATA STUDIO</small></div><button className="v2-mobile-close" onClick={() => setSidebarOpen(false)}><X size={18}/></button></div>
+      <div className="v2-nav-label">工作空间</div>
+      <nav>{nav.map(item => { const Icon = item.icon; return <NavLink key={item.to} to={item.to} onClick={() => setSidebarOpen(false)} className={({ isActive }) => 'v2-nav-item ' + (isActive ? 'active' : '')}><Icon size={17}/><span>{item.label}</span>{item.to === '/activity' && history.length > 0 && <i>{history.length}</i>}</NavLink> })}</nav>
+      <div className="v2-sidebar-bottom">
+        <div className="v2-privacy"><ShieldCheck size={17}/><div><b>本地优先模式</b><small>云端 AI 需单独授权</small></div><Check size={14}/></div>
+        <NavLink to="/settings" className="v2-settings-link"><Settings2 size={16}/> 设置与隐私</NavLink>
+        <div className="v2-version">DATA WORKBENCH · 2.0 FOUNDATION</div>
       </div>
+    </aside>
+    {sidebarOpen && <button aria-label="关闭导航" className="v2-scrim" onClick={() => setSidebarOpen(false)}/>}
+    <main className="v2-main">
+      <header className="v2-topbar"><div className="v2-top-left"><button className="v2-menu" onClick={() => setSidebarOpen(true)}><Menu size={19}/></button><span>工作空间</span><b>/</b><strong>{pageTitle}</strong></div><div className="v2-top-actions"><div className="v2-mode-switch"><button className={mode === 'simple' ? 'selected' : ''} onClick={() => setMode('simple')}>简单模式</button><button className={mode === 'professional' ? 'selected' : ''} onClick={() => setMode('professional')}>专业模式</button></div><button className="v2-ai-button" onClick={() => setMessage('AI 助手将在云端授权与计划校验模块完成后启用。当前数据不会发送到云端。')}><Sparkles size={15}/> AI 助手</button></div></header>
+      <div className="v2-content">
+        <Routes>
+          <Route path="/" element={<Overview {...context}/>}/>
+          <Route path="/overview" element={<Overview {...context}/>}/>
+          <Route path="/data" element={<DataBrowser {...context}/>}/>
+          <Route path="/transform" element={<Transform {...context}/>}/>
+          <Route path="/merge" element={<ModulePage icon={<Combine/>} title="多表合并" description="通过追加或关联，将多个数据来源组合成一个可追溯的数据集。" bullets={['纵向追加：按字段名称对齐多张表','横向关联：Left、Inner、Full、Right Join','字段匹配建议、未匹配记录与行数变化检查']} status="数据引擎接入后开放"/>}/>
+          <Route path="/analysis" element={<ModulePage icon={<BarChart3/>} title="数据分析" description="使用分组、聚合和数据透视，把数据转化为可用的分析结果。" bullets={['拖放字段配置行、列和值','求和、计数、平均值、最大值和最小值','透视结果可继续导出或作为新数据集']} status="分析模块开发中"/>}/>
+          <Route path="/workflows" element={<ModulePage icon={<Workflow/>} title="自动化流程" description="把数据处理步骤保存为模板，并在新数据到来时重复执行。" bullets={['可编辑、可重放的有序处理步骤','记录输入输出版本与执行结果','检测字段变化并在不安全时暂停']} status="工作流引擎开发中"/>}/>
+          <Route path="/activity" element={<ActivityPage history={history}/>}/>
+          <Route path="/settings" element={<SettingsPage mode={mode} setMode={setMode}/>}/>
+        </Routes>
+      </div>
+      {message && <div className="v2-toast" role="status">{message}<button onClick={() => setMessage('')}><X size={14}/></button></div>}
+      <input ref={fileRef} hidden multiple type="file" accept=".xlsx,.xls,.csv" onChange={e => void importFiles(e.target.files)}/>
     </main>
   </div>
 }
-function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)}
-export default App
+
+type Context = {
+  datasets: Dataset[]; setDatasets: React.Dispatch<React.SetStateAction<Dataset[]>>;
+  activeId: string; setActiveId: (id: string) => void; current?: Dataset;
+  mode: Mode; setMode: (mode: Mode) => void; steps: Step[]; setSteps: React.Dispatch<React.SetStateAction<Step[]>>;
+  history: string[]; record: (label: string) => void; importFiles: (files: FileList | null) => Promise<void>;
+  openImport: () => void; exportCurrent: () => void;
+}
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
+  return <div className="v2-page-heading"><div><div className="v2-eyebrow"><Sparkles size={13}/>{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>
+}
+function Overview(p: Context) {
+  const totalRows = p.datasets.reduce((sum, d) => sum + d.rows.length, 0)
+  return <><PageHeading eyebrow="DATA WORKSPACE" title="让数据工作更简单。" description="从文件导入开始，逐步完成识别、清洗、合并与分析。" action={<button className="v2-primary" onClick={p.openImport}><FilePlus2 size={16}/> 导入数据</button>}/>
+    <div className="v2-stat-grid"><Stat label="数据集 / 工作表" value={p.datasets.length.toString()} icon={<Database/>}/><Stat label="数据记录" value={totalRows.toLocaleString()} icon={<Table2/>}/><Stat label="处理步骤" value={p.steps.length.toString()} icon={<Workflow/>}/><Stat label="操作记录" value={p.history.length.toString()} icon={<History/>}/></div>
+    <section className="v2-card v2-start-card"><div className="v2-start-icon"><FileSpreadsheet size={25}/></div><div className="v2-start-copy"><h2>{p.datasets.length ? '继续你的数据工作' : '创建第一个数据工作区'}</h2><p>{p.datasets.length ? '选择一个数据集继续浏览或处理。' : '支持 Excel 和 CSV 文件。文件默认只在当前浏览器中解析，不会自动上传。'}</p></div><button className="v2-secondary" onClick={p.openImport}><FilePlus2 size={15}/> 选择文件</button></section>
+    <section className="v2-card"><div className="v2-section-head"><div><h2>最近数据集</h2><p>当前浏览器会话中的数据文件</p></div><span className="v2-muted">{p.datasets.length} 个工作表</span></div>
+      {p.datasets.length ? <div className="v2-dataset-list">{p.datasets.map(d=><button key={d.id} className="v2-dataset-row" onClick={()=>{p.setActiveId(d.id);location.hash='#/data'}}><span className="v2-file-icon"><FileSpreadsheet size={18}/></span><span className="v2-dataset-name"><b>{d.fileName}</b><small>{d.sheetName} · {d.headers.length} 个字段 · {d.rows.length.toLocaleString()} 行</small></span><MoreHorizontal size={17}/></button>)}</div> : <div className="v2-empty"><Database size={25}/><b>还没有导入数据</b><span>导入 Excel 或 CSV 后，这里会显示你的数据集。</span></div>}
+    </section>
+    <div className="v2-feature-grid">{[{icon:<Table2/>,title:'数据浏览',desc:'查看字段、搜索和筛选数据',to:'#/data'},{icon:<WandSparkles/>,title:'智能处理',desc:'清洗、转换并记录处理步骤',to:'#/transform'},{icon:<Combine/>,title:'多表合并',desc:'追加或关联不同数据来源',to:'#/merge'},{icon:<Bot/>,title:'AI 数据助手',desc:'自然语言生成可检查的操作计划',to:'#/transform'}].map(x=><a className="v2-feature" href={x.to} key={x.title}><span>{x.icon}</span><b>{x.title}</b><small>{x.desc}</small></a>)}</div>
+  </>
+}
+function Stat({label,value,icon}:{label:string;value:string;icon:React.ReactNode}){return <div className="v2-stat"><span>{icon}</span><div><small>{label}</small><b>{value}</b></div></div>}
+function DataBrowser(p:Context){
+  const [q,setQ]=useState('')
+  const [sort,setSort]=useState<{i:number;dir:1|-1}|null>(null)
+  const d=p.current
+  const shown=useMemo(()=>{if(!d)return[];let rows=d.rows.map((r,i)=>({r,i})).filter(x=>!q||x.r.some(v=>cellText(v).toLowerCase().includes(q.toLowerCase())));if(sort)rows.sort((a,b)=>cellText(a.r[sort.i]).localeCompare(cellText(b.r[sort.i]),'zh-CN',{numeric:true})*sort.dir);return rows},[d,q,sort])
+  return <><PageHeading eyebrow="DATA EXPLORER" title="数据浏览" description="搜索、排序并检查导入的数据结构。" action={<button className="v2-primary" onClick={p.openImport}><FilePlus2 size={15}/> 导入文件</button>}/>
+    {!d?<EmptyPrompt onImport={p.openImport}/>:<section className="v2-card"><div className="v2-section-head"><div><h2>{d.fileName} / {d.sheetName}</h2><p>{d.rows.length.toLocaleString()} 行 · {d.headers.length} 个字段</p></div><button className="v2-secondary" onClick={p.exportCurrent}><Download size={15}/> 导出 Excel</button></div><div className="v2-table-toolbar"><div className="v2-search"><Search size={15}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="搜索所有字段…"/></div><span>显示 {Math.min(500,shown.length).toLocaleString()} / {shown.length.toLocaleString()} 行</span></div><div className="v2-table-wrap"><table className="v2-table"><thead><tr><th>#</th>{d.headers.map((h,i)=><th key={i}><button onClick={()=>setSort(s=>s?.i===i?{i,dir:s.dir===1?-1:1}:{i,dir:1})}>{h}{sort?.i===i?(sort.dir===1?<ArrowUp size={12}/>:<ArrowDown size={12}/>):<ChevronDown size={12}/>}</button></th>)}</tr></thead><tbody>{shown.slice(0,500).map(({r,i})=><tr key={i}><td>{i+1}</td>{d.headers.map((_,j)=><td key={j}>{blank(r[j])?<em>空值</em>:cellText(r[j])}</td>)}</tr>)}</tbody></table></div></section>}
+  </>
+}
+function EmptyPrompt({onImport}:{onImport:()=>void}){return <div className="v2-card v2-empty-prompt"><FileSpreadsheet size={32}/><h2>先导入一个数据文件</h2><p>支持 XLSX、XLS 和 CSV 格式。</p><button className="v2-primary" onClick={onImport}><FilePlus2 size={15}/> 选择文件</button></div>}
+function Transform(p:Context){
+  const [column,setColumn]=useState('')
+  const d=p.current
+  function applyTrim(){if(!d)return;const index=d.headers.indexOf(column);if(index<0)return;p.setDatasets(prev=>prev.map(x=>x.id===d.id?{...x,rows:x.rows.map(row=>row.map((v,i)=>i===index&&typeof v==='string'?v.trim():v))}:x));const step={id:uid(),label:'清理首尾空格',detail:'字段：'+column};p.setSteps(prev=>[...prev,step]);p.record('清理字段首尾空格：'+column)}
+  function removeDuplicates(){if(!d)return;const next=[...new Map(d.rows.map(row=>[JSON.stringify(row),row])).values()];p.setDatasets(prev=>prev.map(x=>x.id===d.id?{...x,rows:next}:x));p.setSteps(prev=>[...prev,{id:uid(),label:'删除完全重复行',detail:'保留首次出现的记录'}]);p.record('删除完全重复行')}
+  return <><PageHeading eyebrow="TRANSFORM STUDIO" title="智能数据处理" description="把每个处理动作变成可检查、可追踪的步骤。"/>
+    {!d?<EmptyPrompt onImport={p.openImport}/>:<div className="v2-transform-layout"><section className="v2-card"><div className="v2-section-head"><div><h2>选择数据集</h2><p>{d.fileName} / {d.sheetName}</p></div></div><label className="v2-field-label">处理字段</label><select className="v2-select" value={column} onChange={e=>setColumn(e.target.value)}><option value="">选择一个字段</option>{d.headers.map(h=><option key={h}>{h}</option>)}</select><div className="v2-operation-list"><button disabled={!column} onClick={applyTrim}><WandSparkles size={17}/><span><b>清理首尾空格</b><small>删除所选文本字段前后的空格</small></span></button><button onClick={removeDuplicates}><Table2 size={17}/><span><b>删除完全重复行</b><small>按整行内容去重，保留首次出现项</small></span></button></div><p className="v2-note"><ShieldCheck size={15}/> 当前操作修改浏览器中的工作副本，不会覆盖原始文件。导出前请检查结果。</p></section><section className="v2-card"><div className="v2-section-head"><div><h2>应用步骤</h2><p>按顺序记录本次会话的处理动作</p></div><span className="v2-muted">{p.steps.length} 步</span></div>{p.steps.length?<ol className="v2-steps">{p.steps.map((s,i)=><li key={s.id}><span>{i+1}</span><div><b>{s.label}</b><small>{s.detail}</small></div><Check size={15}/></li>)}</ol>:<div className="v2-empty"><Workflow size={25}/><b>还没有处理步骤</b><span>执行左侧操作后，步骤会出现在这里。</span></div>}<button className="v2-secondary v2-export-wide" onClick={p.exportCurrent}><Download size={15}/> 导出当前数据</button></section></div>}
+  </>
+}
+function ModulePage({icon,title,description,bullets,status}:{icon:React.ReactNode;title:string;description:string;bullets:string[];status:string}){return <><PageHeading eyebrow="WORKSPACE MODULE" title={title} description={description}/><section className="v2-card v2-module-card"><div className="v2-module-icon">{icon}</div><div><span className="v2-status">{status}</span><h2>{title}能力规划</h2><p>该模块已纳入 V2.0 统一架构，当前先完成基础工作台和数据引擎，再接入完整交互。</p></div><ul>{bullets.map(x=><li key={x}>{x}</li>)}</ul></section></>}
+function ActivityPage({history}:{history:string[]}){return <><PageHeading eyebrow="ACTIVITY LOG" title="操作记录" description="查看当前会话中执行过的数据操作。"/><section className="v2-card">{history.length?<div className="v2-steps">{history.map((x,i)=><div className="v2-activity-row" key={i}><span>{history.length-i}</span><b>{x}</b><Check size={15}/></div>)}</div>:<div className="v2-empty"><History size={25}/><b>暂无操作记录</b><span>数据处理操作会记录在这里。</span></div>}</section></>}
+function SettingsPage({mode,setMode}:{mode:Mode;setMode:(m:Mode)=>void}){return <><PageHeading eyebrow="PREFERENCES & PRIVACY" title="设置与隐私" description="管理工作模式和数据共享偏好。"/><section className="v2-card v2-settings"><h2>工作模式</h2><p>简单模式提供引导式操作；专业模式展示更完整的配置与信息。</p><div className="v2-mode-switch large"><button className={mode==='simple'?'selected':''} onClick={()=>setMode('simple')}>简单模式</button><button className={mode==='professional'?'selected':''} onClick={()=>setMode('professional')}>专业模式</button></div><hr/><h2>数据隐私</h2><p>默认在本地浏览器处理文件。云端 AI 功能上线后，会在每次需要发送数据前说明发送内容、服务提供方和用途，并要求你明确授权。当前版本尚未启用云端数据传输。</p><div className="v2-privacy-banner"><ShieldCheck size={18}/> 本地优先 · 云端 AI 需明确授权</div></section></>}
+function Root(){return <HashRouter><AppShell/></HashRouter>}
+export default Root
